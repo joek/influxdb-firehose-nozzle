@@ -1,0 +1,18 @@
+{
+  "UAAURL": "https://uaa.walnut.cf-app.com",
+  "Username": "user",
+  "Password": "user_password",
+  "TrafficControllerURL": "wss://doppler.walnut.cf-app.com:4443",
+  "FirehoseSubscriptionID": "influx-nozzle",
+  "InfluxDbURL": "https://88.198.249.61:8086",
+  "InfluxDbDatabase": "cloudfoundry",
+  "InfluxDbUser": "cf",
+  "InfluxDbPassword": "cf",
+  "InfluxDbAllowSelfSigned": true,
+  "FlushDurationSeconds": 15,
+  "InsecureSSLSkipVerify": true,
+  "MetricPrefix": "datadogclient",
+  "Deployment": "deployment-name",
+  "DisableAccessControl": false,
+  "IdleTimeoutSeconds" : 60
+}
