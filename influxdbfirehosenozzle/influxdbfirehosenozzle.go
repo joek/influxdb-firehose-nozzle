@@ -132,6 +132,10 @@ func (i *InfluxdbFirehoseNozzle) addMetric(envelope *events.Envelope) {
 		"ip":         envelope.GetIp(),
 	}
 
+	for k, v := range envelope.GetTags() {
+		tags[k] = v
+	}
+
 	fields := map[string]interface{}{
 		"value": float64(getValue(envelope)),
 	}

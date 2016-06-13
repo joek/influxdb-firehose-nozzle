@@ -115,4 +115,42 @@ origin.metricName-9,deployment=deployment-name,job=doppler value=9 1000000000
 `))
 	}, 2)
 
+	It("Add tags", func(done Done) {
+		defer close(done)
+
+		for i := 0; i < 3; i++ {
+			envelope := events.Envelope{
+				Origin:    proto.String("origin"),
+				Timestamp: proto.Int64(1000000000),
+				EventType: events.Envelope_ValueMetric.Enum(),
+				ValueMetric: &events.ValueMetric{
+					Name:  proto.String(fmt.Sprintf("metricName-%d", i)),
+					Value: proto.Float64(float64(i)),
+					Unit:  proto.String("gauge"),
+				},
+				Deployment: proto.String("deployment-name"),
+				Job:        proto.String("doppler"),
+				Tags: map[string]string{
+					fmt.Sprintf("tag-%d", i): "tagsvalue",
+					fmt.Sprintf("tag-%d", i): "tagsvalue",
+				},
+			}
+			fakeFirehose.AddEvent(envelope)
+		}
+
+		go nozzle.Start()
+
+		var contents []byte
+		Eventually(fakeInfluxDB.ReceivedContents).Should(Receive(&contents))
+
+		Expect(fakeBuffer.GetContent()).ToNot(ContainSubstring("Error while reading from the firehose"))
+		// +3 internal metrics that show totalMessagesReceived, totalMetricSent, and slowConsumerAlert
+		Expect(string(contents)).Should(Equal(
+			`origin.metricName-0,deployment=deployment-name,job=doppler,tag-0=tagsvalue value=0 1000000000
+origin.metricName-1,deployment=deployment-name,job=doppler,tag-1=tagsvalue value=1 1000000000
+origin.metricName-2,deployment=deployment-name,job=doppler,tag-2=tagsvalue value=2 1000000000
+`))
+
+	}, 2)
+
 })
