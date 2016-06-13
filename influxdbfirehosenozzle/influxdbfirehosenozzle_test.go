@@ -102,16 +102,16 @@ var _ = Describe("Influxdbfirehosenozzle", func() {
 		Expect(fakeBuffer.GetContent()).ToNot(ContainSubstring("Error while reading from the firehose"))
 		// +3 internal metrics that show totalMessagesReceived, totalMetricSent, and slowConsumerAlert
 		Expect(string(contents)).Should(Equal(
-			`origin.metricName-0,deployment=deployment-name,job=doppler value=0 1000000000000000000
-origin.metricName-1,deployment=deployment-name,job=doppler value=1 1000000000000000000
-origin.metricName-2,deployment=deployment-name,job=doppler value=2 1000000000000000000
-origin.metricName-3,deployment=deployment-name,job=doppler value=3 1000000000000000000
-origin.metricName-4,deployment=deployment-name,job=doppler value=4 1000000000000000000
-origin.metricName-5,deployment=deployment-name,job=doppler value=5 1000000000000000000
-origin.metricName-6,deployment=deployment-name,job=doppler value=6 1000000000000000000
-origin.metricName-7,deployment=deployment-name,job=doppler value=7 1000000000000000000
-origin.metricName-8,deployment=deployment-name,job=doppler value=8 1000000000000000000
-origin.metricName-9,deployment=deployment-name,job=doppler value=9 1000000000000000000
+			`origin.metricName-0,deployment=deployment-name,job=doppler value=0 1000000000
+origin.metricName-1,deployment=deployment-name,job=doppler value=1 1000000000
+origin.metricName-2,deployment=deployment-name,job=doppler value=2 1000000000
+origin.metricName-3,deployment=deployment-name,job=doppler value=3 1000000000
+origin.metricName-4,deployment=deployment-name,job=doppler value=4 1000000000
+origin.metricName-5,deployment=deployment-name,job=doppler value=5 1000000000
+origin.metricName-6,deployment=deployment-name,job=doppler value=6 1000000000
+origin.metricName-7,deployment=deployment-name,job=doppler value=7 1000000000
+origin.metricName-8,deployment=deployment-name,job=doppler value=8 1000000000
+origin.metricName-9,deployment=deployment-name,job=doppler value=9 1000000000
 `))
 	}, 2)
 
