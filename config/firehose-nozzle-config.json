@@ -11,7 +11,7 @@
   "InfluxDbAllowSelfSigned": true,
   "FlushDurationSeconds": 15,
   "InsecureSSLSkipVerify": true,
-  "MetricPrefix": "datadogclient",
+  "MetricPrefix": "influxclient",
   "Deployment": "deployment-name",
   "DisableAccessControl": false,
   "IdleTimeoutSeconds" : 60
