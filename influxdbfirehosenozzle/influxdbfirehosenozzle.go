@@ -2,8 +2,8 @@ package influxdbfirehosenozzle
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/cloudfoundry/gosteno"
@@ -17,12 +17,12 @@ import (
 // InfluxdbFirehoseNozzle type
 type InfluxdbFirehoseNozzle struct {
 	config                *nozzleconfig.NozzleConfig
-	errs                  <-chan error
-	messages              <-chan *events.Envelope
+	Errs                  <-chan error
+	Messages              <-chan *events.Envelope
 	authTokenFetcher      AuthTokenFetcher
-	consumer              *consumer.Consumer
-	client                influxdbclient.Client
-	log                   *gosteno.Logger
+	Consumer              *consumer.Consumer
+	Client                influxdbclient.Client
+	Log                   *gosteno.Logger
 	batchPoints           influxdbclient.BatchPoints
 	totalMessagesReceived uint64
 }
@@ -33,17 +33,23 @@ type AuthTokenFetcher interface {
 }
 
 // NewInfluxDBFirehoseNozzle creates new InfluxDBFirehoseNozzle
-func NewInfluxDBFirehoseNozzle(config *nozzleconfig.NozzleConfig, tokenFetcher AuthTokenFetcher, log *gosteno.Logger) *InfluxdbFirehoseNozzle {
+func NewInfluxDBFirehoseNozzle(config *nozzleconfig.NozzleConfig, tokenFetcher AuthTokenFetcher, Log *gosteno.Logger) *InfluxdbFirehoseNozzle {
 	i := &InfluxdbFirehoseNozzle{
 		config:           config,
 		authTokenFetcher: tokenFetcher,
-		log:              log,
+		Log:              Log,
 	}
+
+	i.Consumer = consumer.New(
+		i.config.TrafficControllerURL,
+		&tls.Config{InsecureSkipVerify: i.config.InsecureSSLSkipVerify},
+		nil)
+
 	i.newBatchPoints()
 	return i
 }
 
-func (i *InfluxdbFirehoseNozzle) createClient() {
+func (i *InfluxdbFirehoseNozzle) createClient() error {
 
 	c, err := influxdbclient.NewHTTPClient(influxdbclient.HTTPConfig{
 		Addr:               i.config.InfluxDbURL,
@@ -54,10 +60,13 @@ func (i *InfluxdbFirehoseNozzle) createClient() {
 	})
 	if err != nil {
 		fmt.Println("Error creating InfluxDB Client: ", err.Error())
+		return err
 	}
-	i.client = c
+	i.Client = c
+	return nil
 }
 
+// Start is openning the connection to the firehose and forwarding messages to influxDB.
 func (i *InfluxdbFirehoseNozzle) Start() error {
 	var authToken string
 
@@ -65,45 +74,53 @@ func (i *InfluxdbFirehoseNozzle) Start() error {
 		authToken = i.authTokenFetcher.FetchAuthToken()
 	}
 
-	i.log.Info("Starting Influxdb Firehose Nozzle...")
-	i.createClient()
+	i.Log.Info("Starting Influxdb Firehose Nozzle...")
+	err := i.createClient()
+	if err != nil {
+		return err
+	}
 	i.consumeFirehose(authToken)
-	err := i.postToInfluxDB()
-	i.log.Info("Influxdb Firehose Nozzle shutting down...")
+	err = i.postToInfluxDB()
+	i.Log.Info("Influxdb Firehose Nozzle shutting down...")
 	return err
 }
 
 func (i *InfluxdbFirehoseNozzle) consumeFirehose(authToken string) {
-	i.consumer = consumer.New(
-		i.config.TrafficControllerURL,
-		&tls.Config{InsecureSkipVerify: i.config.InsecureSSLSkipVerify},
-		nil)
-	i.consumer.SetIdleTimeout(time.Duration(i.config.IdleTimeoutSeconds) * time.Second)
-	i.messages, i.errs = i.consumer.Firehose(i.config.FirehoseSubscriptionID, authToken)
+	i.Consumer.SetIdleTimeout(time.Duration(i.config.IdleTimeoutSeconds) * time.Second)
+	i.Messages, i.Errs = i.Consumer.Firehose(i.config.FirehoseSubscriptionID, authToken)
 }
 
-func (i *InfluxdbFirehoseNozzle) postToInfluxDB() error {
+func (i *InfluxdbFirehoseNozzle) postToInfluxDB() (err error) {
 	ticker := time.NewTicker(time.Duration(i.config.FlushDurationSeconds) * time.Second)
 	for {
 		select {
 		case <-ticker.C:
-			i.postMetrics()
-		case envelope := <-i.messages:
+			// TODO: Refactor, post metrics should run in it's own process
+			err = i.postMetrics()
+			if err != nil {
+				return err
+			}
+		case envelope := <-i.Messages:
 			i.handleMessage(envelope)
-			i.addMetric(envelope)
-		case err := <-i.errs:
+			i.AddMetric(envelope)
+			if err != nil {
+				return err
+			}
+		case err := <-i.Errs:
 			i.handleError(err)
 			return err
 		}
 	}
 }
 
-func (i *InfluxdbFirehoseNozzle) postMetrics() {
-	err := i.client.Write(i.batchPoints)
+func (i *InfluxdbFirehoseNozzle) postMetrics() (err error) {
+	err = i.Client.Write(i.batchPoints)
 	if err != nil {
-		i.log.Fatalf("FATAL ERROR: %s\n\n", err)
+		i.Log.Errorf("FATAL ERROR: %s\n\n", err)
+		return
 	}
 	i.newBatchPoints()
+	return
 }
 
 func (i *InfluxdbFirehoseNozzle) newBatchPoints() {
@@ -115,59 +132,64 @@ func (i *InfluxdbFirehoseNozzle) newBatchPoints() {
 
 func (i *InfluxdbFirehoseNozzle) handleMessage(envelope *events.Envelope) {
 	if envelope.GetEventType() == events.Envelope_CounterEvent && envelope.CounterEvent.GetName() == "TruncatingBuffer.DroppedMessages" && envelope.GetOrigin() == "doppler" {
-		i.log.Infof("We've intercepted an upstream message which indicates that the nozzle or the TrafficController is not keeping up. Please try scaling up the nozzle.")
+		i.Log.Infof("We've intercepted an upstream message which indicates that the nozzle or the TrafficController is not keeping up. Please try scaling up the nozzle.")
 		i.alertSlowConsumerError()
 	}
 }
 
-func (i *InfluxdbFirehoseNozzle) addMetric(envelope *events.Envelope) {
+// AddMetric is parsing envelop events and adding numeric metrics to the influx batch cache
+func (i *InfluxdbFirehoseNozzle) AddMetric(envelope *events.Envelope) error {
 	i.totalMessagesReceived++
-	if envelope.GetEventType() != events.Envelope_ValueMetric && envelope.GetEventType() != events.Envelope_CounterEvent {
-		return
-	}
-	tags := map[string]string{
-		"deployment": envelope.GetDeployment(),
-		"job":        envelope.GetJob(),
-		"index":      envelope.GetIndex(),
-		"ip":         envelope.GetIp(),
-	}
+	if envelope.GetEventType() == events.Envelope_ValueMetric || envelope.GetEventType() == events.Envelope_CounterEvent {
 
-	for k, v := range envelope.GetTags() {
-		tags[k] = v
-	}
+		tags := map[string]string{
+			"deployment": envelope.GetDeployment(),
+			"job":        envelope.GetJob(),
+			"index":      envelope.GetIndex(),
+			"ip":         envelope.GetIp(),
+		}
 
-	fields := map[string]interface{}{
-		"value": float64(getValue(envelope)),
-	}
+		for k, v := range envelope.GetTags() {
+			tags[k] = v
+		}
 
-	t := time.Unix(0, envelope.GetTimestamp())
-	pt, err := influxdbclient.NewPoint(getName(envelope), tags, fields, t)
-	if err != nil {
-		log.Println(err)
-	} else {
+		v, err := GetValue(envelope)
+		fields := map[string]interface{}{
+			"value": v,
+		}
+
+		t := time.Unix(0, envelope.GetTimestamp())
+		n, err := GetName(envelope)
+		pt, err := influxdbclient.NewPoint(n, tags, fields, t)
+		if err != nil {
+			return errors.New("Failed to add Point")
+		}
 		i.batchPoints.AddPoint(pt)
 	}
+	return nil
 }
 
-func getName(envelope *events.Envelope) string {
+// GetName generates event name string
+func GetName(envelope *events.Envelope) (string, error) {
 	switch envelope.GetEventType() {
 	case events.Envelope_ValueMetric:
-		return envelope.GetOrigin() + "." + envelope.GetValueMetric().GetName()
+		return envelope.GetOrigin() + "." + envelope.GetValueMetric().GetName(), nil
 	case events.Envelope_CounterEvent:
-		return envelope.GetOrigin() + "." + envelope.GetCounterEvent().GetName()
+		return envelope.GetOrigin() + "." + envelope.GetCounterEvent().GetName(), nil
 	default:
-		panic("Unknown event type")
+		return "", errors.New("Unknown event type")
 	}
 }
 
-func getValue(envelope *events.Envelope) float64 {
+// GetValue extracts the numeric value from different event types.
+func GetValue(envelope *events.Envelope) (float64, error) {
 	switch envelope.GetEventType() {
 	case events.Envelope_ValueMetric:
-		return envelope.GetValueMetric().GetValue()
+		return envelope.GetValueMetric().GetValue(), nil
 	case events.Envelope_CounterEvent:
-		return float64(envelope.GetCounterEvent().GetTotal())
+		return float64(envelope.GetCounterEvent().GetTotal()), nil
 	default:
-		panic("Unknown event type")
+		return 0, errors.New("Unknown event type")
 	}
 }
 
@@ -196,18 +218,18 @@ func (i *InfluxdbFirehoseNozzle) handleError(err error) {
 		case websocket.CloseNormalClosure:
 		// no op
 		case websocket.ClosePolicyViolation:
-			i.log.Errorf("Error while reading from the firehose: %v", err)
-			i.log.Errorf("Disconnected because nozzle couldn't keep up. Please try scaling up the nozzle.")
+			i.Log.Errorf("Error while reading from the firehose: %v", err)
+			i.Log.Errorf("Disconnected because nozzle couldn't keep up. Please try scaling up the nozzle.")
 			i.alertSlowConsumerError()
 		default:
-			i.log.Errorf("Error while reading from the firehose: %v", err)
+			i.Log.Errorf("Error while reading from the firehose: %v", err)
 		}
 	default:
-		i.log.Errorf("Error while reading from the firehose: %v", err)
+		i.Log.Errorf("Error while reading from the firehose: %v", err)
 
 	}
 
-	i.log.Infof("Closing connection with traffic controller due to %v", err)
-	i.consumer.Close()
+	i.Log.Infof("Closing connection with traffic controller due to %v", err)
+	i.Consumer.Close()
 	i.postMetrics()
 }
