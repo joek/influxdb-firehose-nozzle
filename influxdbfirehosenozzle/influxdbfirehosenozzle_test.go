@@ -251,7 +251,8 @@ origin.metricName-2,deployment=deployment-name,job=doppler,tag-2=tagsvalue value
 `))
 
 		}, 2)
-		It("Handle ClosePolicyViolation", func(done Done) {
+
+		It("Handle RetryError", func(done Done) {
 			defer close(done)
 
 			for i := 0; i < 10; i++ {
@@ -277,31 +278,9 @@ origin.metricName-2,deployment=deployment-name,job=doppler,tag-2=tagsvalue value
 			var contents []byte
 			Eventually(fakeInfluxDB.ReceivedContents).Should(Receive(&contents))
 
-			matched, _ := regexp.MatchString(".*slowConsumerAlert value=1 .*", string(contents))
-			Expect(matched).Should(BeTrue())
-
 			logOutput := fakeBuffer.GetContent()
-			Expect(logOutput).To(ContainSubstring("Error while reading from the firehose"))
-			Expect(logOutput).To(ContainSubstring("Client did not respond to ping before keep-alive timeout expired."))
-			Expect(logOutput).To(ContainSubstring("Disconnected because nozzle couldn't keep up."))
+			Expect(logOutput).To(ContainSubstring("Reconnecting"))
 		})
-		It("Handle ClosePolicyViolation", func(done Done) {
-			defer close(done)
 
-			fakeFirehose.SetCloseMessage(websocket.FormatCloseMessage(websocket.CloseInvalidFramePayloadData, "Weird things happened."))
-
-			go nozzle.Start()
-
-			var contents []byte
-			Eventually(fakeInfluxDB.ReceivedContents).Should(Receive(&contents))
-
-			matched, _ := regexp.MatchString(".*slowConsumerAlert value=1 .*", string(contents))
-			Expect(matched).Should(BeFalse())
-
-			logOutput := fakeBuffer.GetContent()
-			Expect(logOutput).To(ContainSubstring("Error while reading from the firehose"))
-			Expect(logOutput).NotTo(ContainSubstring("Client did not respond to ping before keep-alive timeout expired."))
-			Expect(logOutput).NotTo(ContainSubstring("Disconnected because nozzle couldn't keep up."))
-		})
 	})
 })

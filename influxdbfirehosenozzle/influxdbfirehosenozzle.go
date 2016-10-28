@@ -8,8 +8,8 @@ import (
 
 	"github.com/cloudfoundry/gosteno"
 	"github.com/cloudfoundry/noaa/consumer"
+	noaaerrors "github.com/cloudfoundry/noaa/errors"
 	"github.com/cloudfoundry/sonde-go/events"
-	"github.com/gorilla/websocket"
 	influxdbclient "github.com/influxdata/influxdb/client/v2"
 	"github.com/joek/influxdb-firehose-nozzle/nozzleconfig"
 )
@@ -212,18 +212,9 @@ func (i *InfluxdbFirehoseNozzle) addInternalMetric(name string, value uint64) {
 }
 
 func (i *InfluxdbFirehoseNozzle) handleError(err error) {
-	switch closeErr := err.(type) {
-	case *websocket.CloseError:
-		switch closeErr.Code {
-		case websocket.CloseNormalClosure:
-		// no op
-		case websocket.ClosePolicyViolation:
-			i.Log.Errorf("Error while reading from the firehose: %v", err)
-			i.Log.Errorf("Disconnected because nozzle couldn't keep up. Please try scaling up the nozzle.")
-			i.alertSlowConsumerError()
-		default:
-			i.Log.Errorf("Error while reading from the firehose: %v", err)
-		}
+	switch err.(type) {
+	case noaaerrors.RetryError:
+		i.Log.Errorf("Reconnecting: %v", err)
 	default:
 		i.Log.Errorf("Error while reading from the firehose: %v", err)
 
